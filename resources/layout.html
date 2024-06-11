@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Functionally Complete - (Ab-)using QualifiedDo for List Layout</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400..550;1,400..550&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Chocolate+Classical+Sans&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300..700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/default.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/languages/haskell.min.js"></script>
+    <script>hljs.highlightAll();</script>
+    <style>
+      body {
+        background-color: #f7e2cc;
+        font-family: 'Chocolate Classical Sans', sans-serif;
+        color: #4b3832;
+        padding: 20px;
+      }
+      .container {
+        max-width: 800px;
+        margin: 0 auto;
+      }
+      h1 {
+        font-family: 'EB Garamond', serif;
+        font-size: 48px;
+        font-weight: normal;
+        color: black;
+        text-align: center;
+        margin-bottom: 30px;
+        margin-top: 0px;
+      }
+      h2 {
+        font-family: 'EB Garamond', serif;
+        font-size: 32px;
+        font-weight: normal;
+        color: black;
+        margin-top: 40px;
+        margin-bottom: 10px;
+      }
+      .meta-info {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 10px;
+        font-family: 'EB Garamond', serif;
+        font-size: 20px;
+        color: #8e8d8a;
+      }
+      .article-body {
+        font-family: 'Chocolate Classical Sans', sans-serif;
+        color: #3c3736;
+        font-size: 18px;
+        line-height: 1.6;
+      }
+      .back-link:hover {
+        text-decoration: underline;
+      }
+      .back-link {
+        font-family: 'EB Garamond', serif;
+        font-size: 20px;
+        color: #4b3832;
+        text-decoration: underline;
+        display: inline-flex;
+        align-items: center;
+        text-decoration: none;
+      }
+      .back-icon {
+        font-size: 20px;
+        margin-right: 5px;
+        vertical-align: sub;
+      }
+      .monospace {
+        font-family: 'Fira Code', monospace;
+      }
+      h1 .monospace {
+        font-size: 40px;
+      }
+      body .monospace {
+        background: #55220011;
+      }
+      .hljs {
+        background: #55220011;
+      }
+      code {
+        font-family: 'Fira Code', monospace;
+      }
+      p a:link {
+        color: #a4663d;
+        text-decoration: none;
+      }
+      p a:visited {
+        color: #a4663d;
+        text-decoration: none;
+      }
+      p a:hover {
+        text-decoration: underline;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <span class="back-icon">↩</span><a href="index.html" class="back-link">Back to Main Page</a>
+      <h1>(Ab-)using <span class="monospace">QualifiedDo</span> for List Layout</h1>
+      <div class="meta-info">
+        <div>2024-06-11</div>
+        <div>Author: Jakob</div>
+      </div>
+      <div class="article-body">
+        <p>In the <a href="https://github.com/ghc-proposals/ghc-proposals/pull/658">ongoing attempts</a> to improve list literal syntax, one thing that comes up sometimes is <a href="https://gitlab.haskell.org/ghc/ghc/-/wikis/All-things-layout">the idea to use layout instead of brackets</a>.</p>
+        <p>However, one thing that doesn't seem to come up is that this is already sort of supported&mdash;by using the <span class="monospace">QualifiedDo</span> extension. This allows you to write</p>
+        <pre><code class="language-haskell">list :: [Int]
+list = List.do
+  1
+  2
+  3
+  []</code></pre>
+      <p>Below, we'll explore how to make that work, for lists and tuples. It can be easily extended to any other data structure that has a cons-like operation, e.g. heterogeneous lists or <span class="monospace">Data.Sequence</span>.</p>
+      <h2>Lists</h2>
+      <p>The basic idea of <span class="monospace">QualifiedDo</span> is this: A <span class="monospace">M.do</span>-block i desugared into <span class="monospace">&gt;&gt;</span> and <span class="monospace">&gt;&gt;=</span> as usual, but instead of using the operators in <span class="monospace">Prelude</span>, GHC looks for <span class="monospace">M.&gt;&gt;</span> and <span class="monospace">M.&gt;&gt;=</span>. In particular, there is no rule that the types of these operators must have any kind of stucture resembling <span class="monospace">Monad</span>, though that <em>is</em> the intended use-case.</p>
+      <p>You could come up with some interesting things to do with <span class="monospace">&gt;&gt;=</span>/<span class="monospace">&lt;-</span>, but I don't really have a good idea in this case, and will stick to just defining <span class="monospace">&gt;&gt;</span>.
+      <p>A <span class="monospace">do</span>-block like <span class="monospace">do a; b; c</span> is desugared into <span class="monospace">a >> (b >> c)</span>. Conveniently, the operator we're interested in in this case, <span class="monospace">(:)</span>, is right-associative, matching that structure. This also means, though, that if you want to use layout for something left-associative, you're essentially out of luck.</p>
+      <p>But since that's not us, the code we need is really simple:</p>
+      <pre><code class="language-haskell">module Layout.List where
+(>>) = (:)</code></pre>
+      </div>
+      <p>Then, you can import and use it like this:</p>
+      <pre><code class="language-haskell">{-# LANGUAGE QualifiedDo #-}
+        
+import qualified Layout.List as List
+
+list = List.do
+  1
+  2
+  3
+  []</code></pre>
+      <p>Yes, you do need the <span class="monospace">[]</span> at the end. That's a bit of a shame, but when I tried to get rid of it using a class-based approach, I ran into two major obstacles:</p>
+      <ul>
+        <li>You very quickly run into annoying type inference issues</li>
+        <li>You couldn't use it to define one-element lists. <span class="monospace">do a</span> is just desugared into <span class="monospace">a</span>, so since it doesn't use <span class="monospace">&gt;&gt;</span>, there is no way to turn it into a list.
+      </ul>
+      <p>Which is one reason why it might still make sense to pursue a native layout-based solution.</p>
+
+      <h2>Tuples</h2>
+      <p>Tuples don't really have a cons-like operation like lists do with <span class="monospace">(:)</span>. But we can make one. Since tuples have fundamentally different types, the operator will need to be part of a class, so we can overload it:</p>
+      <pre><code class="language-haskell">{-# LANGUAGE TypeFamilies #-}
+
+module TupleLayout where
+import Data.Tuple
+
+class Tupleable a tup where
+  type ConsedTuple a tup
+  (>>) :: a -> tup -> ConsedTuple a tup</code></pre>
+      <p>The result type <span class="monospace">ConsedTuple</span> is a type family that is intended to tell us what happens when you prepend an <span class="monospace">a</span> to the tuple type <span class="monospace">tup</span>.</p>
+      <p>For the base case, we need to think about what happens when you prepend an element to the empty tuple. It might be tempting to say that the result is just the element itself, but that could become problematic, since any type would be a "tuple type" and we'd need a very general instance <span class="monospace">Tupleable a b</span>, which is unpleasant to work with in terms of type inference and instance selection. Instead, we'll use the one-element tuple type that GHC provides, <span class="monospace">Solo</span></p>
+      <pre><code class="language-haskell">instance Tupleable a () where
+  type ConsedTuple a () = Solo a
+  a >> () = MkSolo a</code></pre>
+      <p>From there, we just need to add more instances:</p>
+      <pre><code class="language-haskell">instance Tupleable a (Solo b) where
+  type ConsedTuple a (Solo b) = (a, b)
+  a >> MkSolo b = (a, b)
+
+instance Tupleable a (b, c) where
+  type ConsedTuple a (b, c) = (a, b, c)
+  a >> (b, c) = (a, b, c)
+
+instance Tupleable a (b, c, d) where
+  type ConsedTuple a (b, c, d) = (a, b, c, d)
+  a >> (b, c, d) = (a, b, c, d)</code></pre>
+        <p>I'll stop here, but ideally you'd go all the way to tuples of size 64, the largest size supported by GHC.</p>
+        <p>Since the operator is already named <span class="monospace">>></span>, we don't need to separately define <span class="monospace">&gt;&gt;</span> in this case, we can simply use it as is, like so:</p>
+        <pre><code class="language-haskell">{-# LANGUAGE QualifiedDo, BlockArguments #-}
+
+import qualified Layout.Tuple as Tuple
+
+main = print Tuple.do
+  42
+  "foo"
+  13.5e72
+  ()</code></pre>
+        <p>This will output <span class="monospace">(42, "foo", 1.35e73)</span>.</p>
+        <p>And that's it! You can find the full code (including all 64 tuple instances) <a href="https://github.com/JakobBruenker/qualified-do-layout">here</a>.</p>
+  </body>
+</html>
