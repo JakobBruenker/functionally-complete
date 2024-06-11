@@ -1,0 +1,26 @@
+cabal-version:      3.4
+name:               functionally-complete
+version:            0.1.0.0
+synopsis:           Blog
+-- description:
+homepage:           functionally-complete.com
+license:            NONE
+author:             Jakob Brünker
+maintainer:         jakob.bruenker@gmail.com
+-- copyright:
+category:           Web
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+-- extra-source-files:
+
+common warnings
+    ghc-options: -Wall
+
+executable functionally-complete
+    import:           warnings
+    main-is:          Main.hs
+    -- other-modules:
+    -- other-extensions:
+    build-depends:    base ^>=4.20.0.0
+    hs-source-dirs:   app
+    default-language: GHC2024
