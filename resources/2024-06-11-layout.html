@@ -119,7 +119,7 @@ list = List.do
   []</code></pre>
         <p>Below, we'll explore how to make that work, for lists and tuples. It can be easily extended to any other data structure that has a cons-like operation, e.g. heterogeneous lists or <span class="monospace">Data.Sequence</span>.</p>
         <h2>Lists</h2>
-        <p>The basic idea of <span class="monospace">QualifiedDo</span> is this: A <span class="monospace">M.do</span>-block i desugared into <span class="monospace">&gt;&gt;</span> and <span class="monospace">&gt;&gt;=</span> as usual, but instead of using the operators in <span class="monospace">Prelude</span>, GHC looks for <span class="monospace">M.&gt;&gt;</span> and <span class="monospace">M.&gt;&gt;=</span>. In particular, there is no rule that the types of these operators must have any kind of stucture resembling <span class="monospace">Monad</span>, though that <em>is</em> the intended use-case.</p>
+        <p>The basic idea of <span class="monospace">QualifiedDo</span> is this: A <span class="monospace">M.do</span>-block is desugared into <span class="monospace">&gt;&gt;</span> and <span class="monospace">&gt;&gt;=</span> as usual, but instead of using the operators in <span class="monospace">Prelude</span>, GHC looks for <span class="monospace">M.&gt;&gt;</span> and <span class="monospace">M.&gt;&gt;=</span>. In particular, there is no rule that the types of these operators must have any kind of stucture resembling <span class="monospace">Monad</span>, though that <em>is</em> the intended use-case.</p>
         <p>You could come up with some interesting things to do with <span class="monospace">&gt;&gt;=</span>/<span class="monospace">&lt;-</span>, but I don't really have a good idea in this case, and will stick to just defining <span class="monospace">&gt;&gt;</span>.
         <p>A <span class="monospace">do</span>-block like <span class="monospace">do a; b; c</span> is desugared into <span class="monospace">a >> (b >> c)</span>. Conveniently, the operator we're interested in in this case, <span class="monospace">(:)</span>, is right-associative, matching that structure. This also means, though, that if you want to use layout for something left-associative, you're essentially out of luck.</p>
         <p>But since that's not us, the code we need is really simple:</p>
@@ -180,7 +180,7 @@ main = print Tuple.do
   "foo"
   13.5e72
   ()</code></pre>
-        <p>This will output <span class="monospace">(42, "foo", 1.35e73)</span>.</p>
+        <p>This will output <span class="monospace">(42, "foo", 1.35e72)</span>.</p>
         <p>And that's it! You can find the full code (including all 64 tuple instances) <a href="https://github.com/JakobBruenker/qualified-do-layout">here</a>.</p>
         <hr>
         <p>Update (2024-06-12): There is some related prior art <a href="https://cohost.org/mzero/post/6101015-applicative-do-and-qu" rel="noopener">here</a>.</p>
