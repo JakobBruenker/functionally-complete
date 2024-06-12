@@ -117,17 +117,16 @@ list = List.do
   2
   3
   []</code></pre>
-      <p>Below, we'll explore how to make that work, for lists and tuples. It can be easily extended to any other data structure that has a cons-like operation, e.g. heterogeneous lists or <span class="monospace">Data.Sequence</span>.</p>
-      <h2>Lists</h2>
-      <p>The basic idea of <span class="monospace">QualifiedDo</span> is this: A <span class="monospace">M.do</span>-block i desugared into <span class="monospace">&gt;&gt;</span> and <span class="monospace">&gt;&gt;=</span> as usual, but instead of using the operators in <span class="monospace">Prelude</span>, GHC looks for <span class="monospace">M.&gt;&gt;</span> and <span class="monospace">M.&gt;&gt;=</span>. In particular, there is no rule that the types of these operators must have any kind of stucture resembling <span class="monospace">Monad</span>, though that <em>is</em> the intended use-case.</p>
-      <p>You could come up with some interesting things to do with <span class="monospace">&gt;&gt;=</span>/<span class="monospace">&lt;-</span>, but I don't really have a good idea in this case, and will stick to just defining <span class="monospace">&gt;&gt;</span>.
-      <p>A <span class="monospace">do</span>-block like <span class="monospace">do a; b; c</span> is desugared into <span class="monospace">a >> (b >> c)</span>. Conveniently, the operator we're interested in in this case, <span class="monospace">(:)</span>, is right-associative, matching that structure. This also means, though, that if you want to use layout for something left-associative, you're essentially out of luck.</p>
-      <p>But since that's not us, the code we need is really simple:</p>
-      <pre><code class="language-haskell">module Layout.List where
-(>>) = (:)</code></pre>
-      </div>
-      <p>Then, you can import and use it like this:</p>
-      <pre><code class="language-haskell">{-# LANGUAGE QualifiedDo #-}
+        <p>Below, we'll explore how to make that work, for lists and tuples. It can be easily extended to any other data structure that has a cons-like operation, e.g. heterogeneous lists or <span class="monospace">Data.Sequence</span>.</p>
+        <h2>Lists</h2>
+        <p>The basic idea of <span class="monospace">QualifiedDo</span> is this: A <span class="monospace">M.do</span>-block i desugared into <span class="monospace">&gt;&gt;</span> and <span class="monospace">&gt;&gt;=</span> as usual, but instead of using the operators in <span class="monospace">Prelude</span>, GHC looks for <span class="monospace">M.&gt;&gt;</span> and <span class="monospace">M.&gt;&gt;=</span>. In particular, there is no rule that the types of these operators must have any kind of stucture resembling <span class="monospace">Monad</span>, though that <em>is</em> the intended use-case.</p>
+        <p>You could come up with some interesting things to do with <span class="monospace">&gt;&gt;=</span>/<span class="monospace">&lt;-</span>, but I don't really have a good idea in this case, and will stick to just defining <span class="monospace">&gt;&gt;</span>.
+        <p>A <span class="monospace">do</span>-block like <span class="monospace">do a; b; c</span> is desugared into <span class="monospace">a >> (b >> c)</span>. Conveniently, the operator we're interested in in this case, <span class="monospace">(:)</span>, is right-associative, matching that structure. This also means, though, that if you want to use layout for something left-associative, you're essentially out of luck.</p>
+        <p>But since that's not us, the code we need is really simple:</p>
+        <pre><code class="language-haskell">module Layout.List where
+  (>>) = (:)</code></pre>
+        <p>Then, you can import and use it like this:</p>
+        <pre><code class="language-haskell">{-# LANGUAGE QualifiedDo #-}
         
 import qualified Layout.List as List
 
@@ -136,16 +135,16 @@ list = List.do
   2
   3
   []</code></pre>
-      <p>Yes, you do need the <span class="monospace">[]</span> at the end. That's a bit of a shame, but when I tried to get rid of it using a class-based approach, I ran into two major obstacles:</p>
-      <ul>
-        <li>You very quickly run into annoying type inference issues</li>
-        <li>You couldn't use it to define one-element lists. <span class="monospace">do a</span> is just desugared into <span class="monospace">a</span>, so since it doesn't use <span class="monospace">&gt;&gt;</span>, there is no way to turn it into a list.
-      </ul>
-      <p>Which is one reason why it might still make sense to pursue a native layout-based solution.</p>
+        <p>Yes, you do need the <span class="monospace">[]</span> at the end. That's a bit of a shame, but when I tried to get rid of it using a class-based approach, I ran into two major obstacles:</p>
+        <ul>
+          <li>You very quickly run into annoying type inference issues</li>
+          <li>You couldn't use it to define one-element lists. <span class="monospace">do a</span> is just desugared into <span class="monospace">a</span>, so since it doesn't use <span class="monospace">&gt;&gt;</span>, there is no way to turn it into a list.
+        </ul>
+        <p>Which is one reason why it might still make sense to pursue a native layout-based solution.</p>
 
-      <h2>Tuples</h2>
-      <p>Tuples don't really have a cons-like operation like lists do with <span class="monospace">(:)</span>. But we can make one. Since tuples have fundamentally different types, the operator will need to be part of a class, so we can overload it:</p>
-      <pre><code class="language-haskell">{-# LANGUAGE TypeFamilyDependencies #-}
+        <h2>Tuples</h2>
+        <p>Tuples don't really have a cons-like operation like lists do with <span class="monospace">(:)</span>. But we can make one. Since tuples have fundamentally different types, the operator will need to be part of a class, so we can overload it:</p>
+        <pre><code class="language-haskell">{-# LANGUAGE TypeFamilyDependencies #-}
 
 module TupleLayout where
 import Data.Tuple
@@ -153,13 +152,13 @@ import Data.Tuple
 class ConsTuple a tup where
   type ConsedTuple a tup = tup' | tup' -> a tup
   (>>) :: a -> tup -> ConsedTuple a tup</code></pre>
-      <p>The result type <span class="monospace">ConsedTuple</span> is a type family that is intended to tell us what happens when you prepend an <span class="monospace">a</span> to the tuple type <span class="monospace">tup</span>. (I added the injectivity annoation <span class="monospace">tup' -> a tup</span> after Solonarv in Discord suggested it may lead to better type inference - I haven't run into such a case yet, but it does at least produce more straightforward error messages sometimes).</p>
-      <p>For the base case, we need to think about what happens when you prepend an element to the empty tuple. It might be tempting to say that the result is just the element itself, but that could become problematic, since any type would be a "tuple type" and we'd need a very general instance <span class="monospace">ConsTuple a b</span>, which is unpleasant to work with in terms of type inference and instance selection. Instead, we'll use the one-element tuple type that GHC provides, <span class="monospace">Solo</span>.</p>
-      <pre><code class="language-haskell">instance ConsTuple a () where
+        <p>The result type <span class="monospace">ConsedTuple</span> is a type family that is intended to tell us what happens when you prepend an <span class="monospace">a</span> to the tuple type <span class="monospace">tup</span>. (I added the injectivity annoation <span class="monospace">tup' -> a tup</span> after Solonarv in Discord suggested it may lead to better type inference - I haven't run into such a case yet, but it does at least produce more straightforward error messages sometimes).</p>
+        <p>For the base case, we need to think about what happens when you prepend an element to the empty tuple. It might be tempting to say that the result is just the element itself, but that could become problematic, since any type would be a "tuple type" and we'd need a very general instance <span class="monospace">ConsTuple a b</span>, which is unpleasant to work with in terms of type inference and instance selection. Instead, we'll use the one-element tuple type that GHC provides, <span class="monospace">Solo</span>.</p>
+        <pre><code class="language-haskell">instance ConsTuple a () where
   type ConsedTuple a () = Solo a
   a >> () = MkSolo a</code></pre>
-      <p>From there, we just need to add more instances:</p>
-      <pre><code class="language-haskell">instance ConsTuple a (Solo b) where
+        <p>From there, we just need to add more instances:</p>
+        <pre><code class="language-haskell">instance ConsTuple a (Solo b) where
   type ConsedTuple a (Solo b) = (a, b)
   a >> MkSolo b = (a, b)
 
@@ -183,5 +182,7 @@ main = print Tuple.do
   ()</code></pre>
         <p>This will output <span class="monospace">(42, "foo", 1.35e73)</span>.</p>
         <p>And that's it! You can find the full code (including all 64 tuple instances) <a href="https://github.com/JakobBruenker/qualified-do-layout">here</a>.</p>
+      </div>
+    </div>
   </body>
 </html>
