@@ -23,11 +23,12 @@ executable functionally-complete
     -- other-extensions:
     build-depends:    base ^>=4.20.0.0,
                       warp ^>=3.4.1,
+                      warp-tls ^>=3.4.5,
                       wai ^>=3.2.4,
-                      http-types ^>=0.12.4,
                       wai-middleware-static ^>=0.9.2,
-                      bytestring ^>=0.12.1,
                       wai-app-static ^>=3.1.9,
+                      http-types ^>=0.12.4,
+                      bytestring ^>=0.12.1,
                       filepath ^>=1.5.2,
                       directory ^>=1.3.8,
     hs-source-dirs:   app
