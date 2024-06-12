@@ -10,10 +10,13 @@ import qualified Data.ByteString.Char8 as BS
 import System.FilePath ((<.>), takeExtension)
 import System.Directory (doesFileExist)
 
+port :: Int
+port = 80
+
 main :: IO ()
 main = do
-    putStrLn "Starting server on http://localhost:8080"
-    run 8080 app
+    putStrLn $ "Starting server on http://localhost:" <> show port
+    run port app
 
 app :: Application
 app req respond = do
