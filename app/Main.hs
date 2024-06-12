@@ -8,6 +8,7 @@ import Network.Wai.Handler.WarpTLS
 import Network.Wai.Middleware.Static
 import Network.HTTP.Types (ok200, movedPermanently301, notFound404)
 import qualified Data.ByteString.Char8 as BS
+import qualified Data.ByteString.Lazy as LBS
 import System.FilePath ((<.>), hasExtension)
 import System.Directory (doesFileExist)
 import Control.Concurrent (forkIO)
@@ -51,7 +52,8 @@ staticApp path req respond = do
 
 -- Fallback response if the file is not found
 notFound :: Application
-notFound _ respond = respond $ responseFile notFound404 [("Content-Type", "text/html")] "resources/404.html" Nothing
+-- Need to use responseLBS since responseFile without explicit FilePart handling ignores the status code
+notFound _ respond = respond . responseLBS notFound404 [("Content-Type", "text/html")] =<< LBS.readFile "resources/404.html"
 
 -- Redirect HTTP to HTTPS
 redirectApp :: Application
