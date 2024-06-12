@@ -102,7 +102,7 @@
   </head>
   <body>
     <div class="container">
-      <span class="back-icon">↩</span><a href="index.html" class="back-link">Back to Main Page</a>
+      <span class="back-icon">↩</span><a href="/" class="back-link">Back to Main Page</a>
       <h1>(Ab-)using <span class="monospace">QualifiedDo</span> for List Layout</h1>
       <div class="meta-info">
         <div>2024-06-11</div>
@@ -145,29 +145,29 @@ list = List.do
 
       <h2>Tuples</h2>
       <p>Tuples don't really have a cons-like operation like lists do with <span class="monospace">(:)</span>. But we can make one. Since tuples have fundamentally different types, the operator will need to be part of a class, so we can overload it:</p>
-      <pre><code class="language-haskell">{-# LANGUAGE TypeFamilies #-}
+      <pre><code class="language-haskell">{-# LANGUAGE TypeFamilyDependencies #-}
 
 module TupleLayout where
 import Data.Tuple
 
-class Tupleable a tup where
-  type ConsedTuple a tup
+class ConsTuple a tup where
+  type ConsedTuple a tup = tup' | tup' -> a tup
   (>>) :: a -> tup -> ConsedTuple a tup</code></pre>
-      <p>The result type <span class="monospace">ConsedTuple</span> is a type family that is intended to tell us what happens when you prepend an <span class="monospace">a</span> to the tuple type <span class="monospace">tup</span>.</p>
-      <p>For the base case, we need to think about what happens when you prepend an element to the empty tuple. It might be tempting to say that the result is just the element itself, but that could become problematic, since any type would be a "tuple type" and we'd need a very general instance <span class="monospace">Tupleable a b</span>, which is unpleasant to work with in terms of type inference and instance selection. Instead, we'll use the one-element tuple type that GHC provides, <span class="monospace">Solo</span></p>
-      <pre><code class="language-haskell">instance Tupleable a () where
+      <p>The result type <span class="monospace">ConsedTuple</span> is a type family that is intended to tell us what happens when you prepend an <span class="monospace">a</span> to the tuple type <span class="monospace">tup</span>. (I added the injectivity annoation <span class="monospace">tup' -> a tup</span> after Solonarv in Discord suggested it may lead to better type inference - I haven't run into such a case yet, but it does at least produce more straightforward error messages sometimes).</p>
+      <p>For the base case, we need to think about what happens when you prepend an element to the empty tuple. It might be tempting to say that the result is just the element itself, but that could become problematic, since any type would be a "tuple type" and we'd need a very general instance <span class="monospace">ConsTuple a b</span>, which is unpleasant to work with in terms of type inference and instance selection. Instead, we'll use the one-element tuple type that GHC provides, <span class="monospace">Solo</span>.</p>
+      <pre><code class="language-haskell">instance ConsTuple a () where
   type ConsedTuple a () = Solo a
   a >> () = MkSolo a</code></pre>
       <p>From there, we just need to add more instances:</p>
-      <pre><code class="language-haskell">instance Tupleable a (Solo b) where
+      <pre><code class="language-haskell">instance ConsTuple a (Solo b) where
   type ConsedTuple a (Solo b) = (a, b)
   a >> MkSolo b = (a, b)
 
-instance Tupleable a (b, c) where
+instance ConsTuple a (b, c) where
   type ConsedTuple a (b, c) = (a, b, c)
   a >> (b, c) = (a, b, c)
 
-instance Tupleable a (b, c, d) where
+instance ConsTuple a (b, c, d) where
   type ConsedTuple a (b, c, d) = (a, b, c, d)
   a >> (b, c, d) = (a, b, c, d)</code></pre>
         <p>I'll stop here, but ideally you'd go all the way to tuples of size 64, the largest size supported by GHC.</p>
