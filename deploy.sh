@@ -24,4 +24,8 @@ sudo bash -c "sed 's|{{APP_NAME}}|$APP_NAME|g; s|{{APP_PATH}}|$APP_PATH|g; s|{{W
 sudo systemctl enable $APP_NAME.service
 sudo systemctl restart $APP_NAME.service
 
+echo "Service restarted."
+sleep 5
+systemctl status functionally-complete.service  --no-pager
+
 kill $KEEP_SUDO_PID
