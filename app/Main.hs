@@ -12,7 +12,7 @@ import System.FilePath ((<.>), takeExtension)
 import System.Directory (doesFileExist)
 import Control.Concurrent (forkIO)
 import Data.Maybe (fromMaybe)
-import System.Environment (getEnv)
+import System.Environment (getEnv, getArgs)
 
 portHTTP :: Int
 portHTTP = 80
@@ -22,14 +22,21 @@ portHTTPS = 443
 
 main :: IO ()
 main = do
-    certPath <- getEnv "SSL_CERT_PATH"
-    keyPath <- getEnv "SSL_KEY_PATH"
-    putStrLn $ "Starting HTTP server on http://localhost:" <> show portHTTP
-    putStrLn $ "Starting HTTPS server on https://localhost:" <> show portHTTPS
-    -- HTTP to HTTPS redirect server
-    _ <- forkIO $ run portHTTP redirectApp
-    -- HTTPS server
-    runTLS (tlsSettings certPath keyPath) (setPort portHTTPS defaultSettings) app
+    args <- getArgs
+    case args of
+        [] -> do
+            certPath <- getEnv "SSL_CERT_PATH"
+            keyPath <- getEnv "SSL_KEY_PATH"
+            putStrLn $ "Starting HTTP server on http://localhost:" <> show portHTTP
+            putStrLn $ "Starting HTTPS server on https://localhost:" <> show portHTTPS
+            -- HTTP to HTTPS redirect server
+            _ <- forkIO $ run portHTTP redirectApp
+            -- HTTPS server
+            runTLS (tlsSettings certPath keyPath) (setPort portHTTPS defaultSettings) app
+        ["--http"] -> do
+            putStrLn $ "Starting HTTP server on http://localhost:" <> show portHTTP
+            run portHTTP app
+        _ -> putStrLn "Invalid arguments. Usage: functionally-complete [--http]"
 
 app :: Application
 app req respond = do
