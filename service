@@ -1,0 +1,13 @@
+[Unit]
+Description=Functionally Complete Web Server
+
+[Service]
+Environment="SSL_CERT_PATH=/etc/letsencrypt/live/{{APP_NAME}}.com/fullchain.pem"
+Environment="SSL_KEY_PATH=/etc/letsencrypt/live/{{APP_NAME}}.com/privkey.pem"
+ExecStart={{APP_PATH}}
+WorkingDirectory={{WORKING_DIR}}
+Restart=always
+User=user
+
+[Install]
+WantedBy=multi-user.target
