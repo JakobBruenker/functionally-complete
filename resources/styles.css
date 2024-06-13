@@ -1,0 +1,153 @@
+body {
+  background-color: #f7e2cc;
+  padding: 20px;
+  max-width: 800px;
+  margin: 0 auto;
+  font-family: 'Chocolate Classical Sans', sans-serif;
+  color: #4b3832;
+}
+
+h1 {
+  font-family: 'EB Garamond', serif;
+  font-size: 48px;
+  font-weight: normal;
+  color: black;
+  text-align: center;
+  margin-bottom: 30px;
+  margin-top: 0px;
+}
+
+h1.logo {
+  color: #452e15;
+  font-family: 'EB Garamond', serif;
+  font-size: 52px;
+  font-weight: bold;
+  text-align: center;
+  margin-top: 50px;
+  margin-bottom: 50px;
+  font-style: italic;
+  letter-spacing: -2px;
+}
+
+h1.error {
+  color: #452e15;
+  font-family: 'EB Garamond', serif;
+  font-weight: bold;
+  font-size: 52px;
+  text-align: center;
+  margin-top: 50px;
+  margin-bottom: 50px;
+}
+
+h1 code {
+  font-size: 40px;
+}
+
+h2 {
+  font-family: 'EB Garamond', serif;
+  font-size: 32px;
+  font-weight: normal;
+  color: black;
+  margin-top: 40px;
+  margin-bottom: 10px;
+}
+
+.meta-info {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-family: 'EB Garamond', serif;
+  font-size: 20px;
+  color: #8e8d8a;
+}
+
+.hljs {
+  background: #55220011;
+}
+
+.article-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.article-link {
+  font-family: 'EB Garamond', serif;
+  font-size: 32px;
+  color: black;
+  text-decoration: none;
+}
+
+.article-link:hover {
+  text-decoration: underline;
+}
+
+.article-link code {
+  font-size: 26px;
+}
+
+.article-date {
+  color: #8e8d8a;
+  font-family: 'EB Garamond', serif;
+  font-size: 20px;
+  margin-bottom: -7px;
+}
+
+code {
+  background: #55220011;
+  font-family: 'Fira Code', monospace;
+}
+
+.back-link:hover {
+  text-decoration: underline;
+}
+
+.back-link {
+  font-family: 'EB Garamond', serif;
+  font-size: 20px;
+  color: #4b3832;
+  text-decoration: underline;
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.back-icon {
+  font-size: 20px;
+  margin-right: 5px;
+  vertical-align: sub;
+}
+
+.back {
+  text-align: center;
+}
+
+p a:link {
+  color: #a4663d;
+  text-decoration: none;
+}
+
+p a:visited {
+  color: #a4663d;
+  text-decoration: none;
+}
+
+p a:hover {
+  text-decoration: underline;
+}
+
+.article-body {
+  font-family: 'Chocolate Classical Sans', sans-serif;
+  color: #3c3736;
+  font-size: 18px;
+  line-height: 1.6;
+}
+
+.error-explanation {
+  font-family: 'EB Garamond', serif;
+  font-size: 32px;
+  text-align: center;
+  color: #452e15;
+  padding: 20px;
+}
