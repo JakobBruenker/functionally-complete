@@ -104,7 +104,7 @@ main = do
   let apiKeyFile = configDir </> "api_key"
       activeEnvFile = configDir </> "active_env"
   
-  apiKey <- BS.pack <$> readFile apiKeyFile
+  apiKey <- readApiKey apiKeyFile
   apiKeyVar <- newMVar apiKey
   
   activeEnv <- readEnvFile activeEnvFile
@@ -115,6 +115,9 @@ main = do
   let appConfig = AppConfig {..}
   
   runProxy appConfig apiKeyFile activeEnvFile (httpPort opts) (httpsPort opts)
+
+readApiKey :: FilePath -> IO BS.ByteString
+readApiKey file = BS.pack . takeWhile (not . isSpace) . dropWhile isSpace <$> readFile file
 
 readEnvFile :: FilePath -> IO Env
 readEnvFile file = do
@@ -139,7 +142,7 @@ watchApiKeyFile :: MVar BS.ByteString -> FilePath -> IO ()
 watchApiKeyFile apiKeyVar apiKeyFile = withManager $ \mgr -> do
     void $ watchDir mgr (takeDirectory apiKeyFile) (const True) $ \event ->
         when (eventPath event == apiKeyFile) $ do
-            newApiKey <- BS.pack <$> readFile apiKeyFile
+            newApiKey <- readApiKey apiKeyFile
             void $ swapMVar apiKeyVar newApiKey
             putStrLn "API key updated"
     forever $ threadDelay 1000000
@@ -156,6 +159,8 @@ watchActiveEnvFile activeEnvVar activeEnvFile = withManager $ \mgr -> do
 checkApiKey :: MVar BS.ByteString -> Middleware
 checkApiKey apiKeyVar app req respond = do
     apiKey <- readMVar apiKeyVar
+    putStrLn $ "API key: " ++ show apiKey
+    putStrLn $ "Request headers: " ++ show (requestHeaders req)
     case lookup "X-API-Key" (requestHeaders req) of
         Just key | key == apiKey -> app req respond
         _ -> respond $ responseLBS unauthorized401 [("Content-Type", "text/plain")] "Unauthorized"
