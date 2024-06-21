@@ -169,11 +169,8 @@ proxyApp :: Request -> (Response -> IO ResponseReceived) -> App ResponseReceived
 proxyApp req respond = do
     AppConfig{manager, activeEnvVar, apiKeyVar} <- ask
     case pathInfo req of
-        ["health"] -> do
-            backendHealthy <- checkBackendHealth =<< getActiveEnv
-            liftIO $ if backendHealthy
-                then respond $ responseLBS ok200 [("Content-Type", "text/plain")] "OK"
-                else respond $ responseLBS serviceUnavailable503 [("Content-Type", "text/plain")] "Service Unavailable"
+        ["health"] -> liftIO $ healthOfEnv activeEnvVar req respond
+        ["preview-health"] -> liftIO $ checkApiKey apiKeyVar (healthOfEnv activeEnvVar) req respond
         ["active"] -> liftIO $ checkApiKey apiKeyVar (getActiveAndRespond activeEnvVar respond) req respond
         ["switch"] -> liftIO $ checkApiKey apiKeyVar (switchInstance activeEnvVar respond) req respond
         "preview" : rest -> liftIO $ checkApiKey apiKeyVar (previewInactiveServer activeEnvVar manager rest) req respond
@@ -186,6 +183,15 @@ proxyApp req respond = do
                         [("Content-Type", "text/plain")] 
                         "Unable to process your request at this time. Please try again later."
             liftIO $ waiProxyTo proxyDest handleErrors manager req respond
+    where
+      healthOfEnv :: MVar Env -> Application
+      healthOfEnv activeEnvVar _ res = do
+          env <- readMVar activeEnvVar
+          backendHealthy <- checkBackendHealth env
+          if backendHealthy
+              then res $ responseLBS ok200 [("Content-Type", "text/plain")] "OK"
+              else res $ responseLBS serviceUnavailable503 [("Content-Type", "text/plain")] "Service Unavailable"
+
 
 previewInactiveServer :: MVar Env -> Manager -> [Text] -> Application
 previewInactiveServer activeEnvVar manager pathSegments req respond = do
@@ -209,11 +215,11 @@ getActiveEnv = do
     AppConfig{..} <- ask
     liftIO $ readMVar activeEnvVar
 
-checkBackendHealth :: Env -> App Bool
+checkBackendHealth :: Env -> IO Bool
 checkBackendHealth env = do
     let request = HTTP.parseRequest_ $ "http://localhost:" ++ show (port env) ++ "/health"
     response <- liftIO $ try $ HTTP.httpLbs request
-    return $ case response of
+    pure case response of
         Left (_ :: HTTP.HttpException) -> False
         Right res -> statusCode (HTTP.getResponseStatus res) == 200
 
