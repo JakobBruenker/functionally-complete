@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE BlockArguments #-}
 
 module Main (main) where
 
@@ -26,6 +27,11 @@ import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import System.Environment (getEnv)
 import System.FilePath ((</>), takeDirectory)
 import System.FSNotify
+import Data.Text (Text)
+import Data.Text qualified as T
+
+-- TODO instead of blue/green, have MVar (activePort, inactivePort) and two files activePort/inactivePort
+-- TODO I'm not sure App Application makes sense, that's double IO. Seems like it might have stale MVar values then?
 
 data Opts = Opts
   { httpPort :: Int
@@ -161,7 +167,7 @@ reverseProxyApp = do
 
 proxyApp :: Request -> (Response -> IO ResponseReceived) -> App ResponseReceived
 proxyApp req respond = do
-    AppConfig{..} <- ask
+    AppConfig{manager, activeEnvVar, apiKeyVar} <- ask
     case pathInfo req of
         ["health"] -> do
             backendHealthy <- checkBackendHealth =<< getActiveEnv
@@ -170,6 +176,7 @@ proxyApp req respond = do
                 else respond $ responseLBS serviceUnavailable503 [("Content-Type", "text/plain")] "Service Unavailable"
         ["active"] -> liftIO $ checkApiKey apiKeyVar (getActiveAndRespond activeEnvVar respond) req respond
         ["switch"] -> liftIO $ checkApiKey apiKeyVar (switchInstance activeEnvVar respond) req respond
+        "preview" : rest -> liftIO $ checkApiKey apiKeyVar (previewInactiveServer activeEnvVar manager rest) req respond
         _ -> do
             activeEnv <- getActiveEnv
             let proxyDest _ = return $ WPRProxyDest $ ProxyDest "127.0.0.1" (port activeEnv)
@@ -179,6 +186,18 @@ proxyApp req respond = do
                         [("Content-Type", "text/plain")] 
                         "Unable to process your request at this time. Please try again later."
             liftIO $ waiProxyTo proxyDest handleErrors manager req respond
+
+previewInactiveServer :: MVar Env -> Manager -> [Text] -> Application
+previewInactiveServer activeEnvVar manager pathSegments req respond = do
+      activeEnv <- liftIO $ readMVar activeEnvVar
+      let inactiveEnv = if activeEnv == Blue then Green else Blue
+          inactivePort = port inactiveEnv
+          newPath = BS.intercalate "/" $ map (BS.pack . T.unpack) pathSegments
+          proxyReq = req { rawPathInfo = newPath
+                        , requestHeaderHost = Just "localhost"
+                        }
+      let proxyDest _ = return $ WPRProxyDest $ ProxyDest "127.0.0.1" inactivePort
+      waiProxyTo proxyDest defaultOnExc manager proxyReq respond
 
 getActiveAndRespond :: MVar Env -> (Response -> IO ResponseReceived) -> Application
 getActiveAndRespond activeEnvVar respond _ _ = do
