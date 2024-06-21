@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Main where
+
+module Main (main) where
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar
@@ -27,20 +28,44 @@ data Opts = Opts
   , httpsPort :: Int
   }
 
+-- TODO
+-- Set up app config dir
+-- All the files (API key, active) are there, and are read into MVars
+-- The MVars are provided via ReaderT to the app
+
+defaultHttpPort, defaultHttpsPort :: Int
+defaultHttpPort = 80
+defaultHttpsPort = 443
+
 optsParser :: Parser Opts
 optsParser = Opts
   <$> option auto
       ( long "http-port"
      <> short 'p'
      <> metavar "HTTP_PORT"
-     <> value 80
-     <> help "Port for HTTP server (default: 80)" )
+     <> value defaultHttpPort
+     <> help ("Port for HTTP server (default: " <> show defaultHttpPort <> ")") )
   <*> option auto
       ( long "https-port"
      <> short 's'
      <> metavar "HTTPS_PORT"
-     <> value 443
-     <> help "Port for HTTPS server (default: 443)" )
+     <> value defaultHttpsPort
+     <> help ("Port for HTTPS server (default: " <> show defaultHttpsPort <> ")") )
+
+data Env = Blue | Green deriving Eq
+
+serializeEnv :: Env -> String
+serializeEnv Blue = "blue"
+serializeEnv Green = "green"
+
+parseEnv :: String -> Maybe Env
+parseEnv "blue" = Just Blue
+parseEnv "green" = Just Green
+parseEnv _ = Nothing
+
+port :: Env -> Int
+port Blue = 8080
+port Green = 8081
 
 main :: IO ()
 main = do
@@ -92,60 +117,32 @@ reverseProxyApp :: MVar BS.ByteString -> Manager -> Application
 reverseProxyApp apiKeyVar manager req respond = 
     case pathInfo req of
         ["health"] -> do
-            (port, _) <- getActivePortAndEnv
-            backendHealthy <- checkBackendHealth port
+            backendHealthy <- checkBackendHealth =<< getActiveEnv
             if backendHealthy
                 then respond $ responseLBS status200 [("Content-Type", "text/plain")] "OK"
                 else respond $ responseLBS status503 [("Content-Type", "text/plain")] "Service Unavailable"
         ["active"] -> checkApiKey apiKeyVar (getActiveAndRespond respond) req respond
         ["switch"] -> checkApiKey apiKeyVar switchInstance req respond
         _ -> do
-            (port, _) <- getActivePortAndEnv
-            let proxyDest _ = return $ WPRProxyDest $ ProxyDest "127.0.0.1" port
-            catch 
-                (waiProxyTo proxyDest defaultOnExc manager req respond)
-                (\(e :: SomeException) -> do
-                    putStrLn $ "Error: " ++ show e
-                    respond $ responseLBS status502 
+            let proxyDest _ = WPRProxyDest . ProxyDest "127.0.0.1" . port <$> getActiveEnv
+                handleErrors e _ res = do
+                    putStrLn $ "Proxy error: " ++ show e
+                    res $ responseLBS status502 
                         [("Content-Type", "text/plain")] 
-                        "Unable to process your request at this time. Please try again later.")
+                        "Unable to process your request at this time. Please try again later."
+            (waiProxyTo proxyDest handleErrors manager req respond)
 
 getActiveAndRespond :: (Response -> IO ResponseReceived) -> Application
 getActiveAndRespond respond _ _ = do
-    (_, env) <- getActivePortAndEnv
-    respond $ responseLBS status200 [("Content-Type", "text/plain")] (LBS.pack env)
+    env <- getActiveEnv
+    respond $ responseLBS status200 [("Content-Type", "text/plain")] (LBS.pack $ serializeEnv env)
 
-getActivePort :: IO Int
-getActivePort = do
-    content <- catch (readFile "/path/to/active_env") handleError
-    return $ if trim content == "blue" then 8080 else 8081
-  where
-    handleError :: SomeException -> IO String
-    handleError _ = return "blue"  -- Default to blue if file read fails
-    trim = filter (not . isSpace)
+getActiveEnv :: IO Env
+getActiveEnv = fmap (fromMaybe Blue) $ catch @SomeException (parseEnv . filter (not . isSpace) <$> readFile "/path/to/active_env") (\_ -> pure Nothing)
 
-getActiveEnvironment :: IO String
-getActiveEnvironment = do
-    content <- catch (readFile "/path/to/active_env") handleError
-    return $ trim content
-  where
-    handleError :: SomeException -> IO String
-    handleError _ = return "blue"  -- Default to blue if file read fails
-    trim = filter (not . isSpace)
-
-getActivePortAndEnv :: IO (Int, String)
-getActivePortAndEnv = do
-    content <- catch (readFile "/path/to/active_env") handleError
-    let env = trim content
-    return $ if env == "blue" then (8080, "blue") else (8081, "green")
-  where
-    handleError :: SomeException -> IO String
-    handleError _ = return "blue"  -- Default to blue if file read fails
-    trim = filter (not . isSpace)
-
-checkBackendHealth :: Int -> IO Bool
-checkBackendHealth port = do
-    let request = HTTP.parseRequest_ $ "http://localhost:" ++ show port ++ "/health"
+checkBackendHealth :: Env -> IO Bool
+checkBackendHealth env = do
+    let request = HTTP.parseRequest_ $ "http://localhost:" ++ show (port env) ++ "/health"
     response <- try $ HTTP.httpLBS request
     case response of
         Left (_ :: HTTP.HttpException) -> return False
@@ -161,7 +158,7 @@ tlsSettings cert key = tlsSettingsChain cert [cert] key
 
 switchInstance :: Application
 switchInstance _ respond = do
-    (_, currentEnv) <- getActivePortAndEnv
-    let newEnv = if currentEnv == "blue" then "green" else "blue"
-    writeFile "/path/to/active_env" newEnv
+    currentEnv <- getActiveEnv
+    let newEnv = if currentEnv == Blue then Green else Blue
+    writeFile "/path/to/active_env" $ serializeEnv newEnv
     respond $ responseLBS status200 [] "Switched instance"
