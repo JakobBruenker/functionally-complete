@@ -1,0 +1,24 @@
+@font-face {
+  font-family: 'EB Garamond';
+  font-style: normal;
+  font-weight: 400 650;
+  src: url('font/eb-garamond-variable.woff2') format('woff2-variations');
+}
+@font-face {
+  font-family: 'EB Garamond';
+  font-style: italic;
+  font-weight: 400 650;
+  src: url('font/eb-garamond-italic-variable.woff2') format('woff2-variations');
+}
+@font-face {
+  font-family: 'Fira Code';
+  font-style: normal;
+  font-weight: 300 500;
+  src: url('font/fira-code-variable.woff2') format('woff2-variations');
+}
+@font-face {
+  font-family: 'Chocolate Classical Sans';
+  font-style: normal;
+  font-weight: 400;
+  src: url('font/chocolate-classical-sans.woff2') format('woff2');
+}
