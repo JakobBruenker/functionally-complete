@@ -24,13 +24,14 @@ import Network.Wai.Handler.Warp
 import Network.Wai.Handler.WarpTLS (runTLS, tlsSettingsChain, TLSSettings)
 import Options.Applicative
 import System.Directory (createDirectoryIfMissing, getHomeDirectory)
-import System.Environment (getEnv)
+import System.Environment (getEnv, getProgName)
 import System.FilePath ((</>), takeDirectory)
 import System.FSNotify
 import Data.Text (Text)
 import Data.Text qualified as T
 
 -- TODO instead of blue/green, have MVar (activePort, inactivePort) and two files activePort/inactivePort
+-- -> probably default files with 8080 and 8081 should be created if they don't exist
 -- TODO I'm not sure App Application makes sense, that's double IO. Seems like it might have stale MVar values then?
 
 data Opts = Opts
@@ -91,10 +92,11 @@ port Green = 8081
 
 main :: IO ()
 main = do
+  progName <- getProgName
   opts <- execParser $ info (optsParser <**> helper)
     ( fullDesc
     <> progDesc "Run the reverse proxy for blue-green deployment"
-    <> header "reverse-proxy - A reverse proxy for blue-green deployment" )
+    <> header progName )
   
   configDir <- if "~" `isPrefixOf` configDir opts
                 then (</> drop 2 (configDir opts)) <$> getHomeDirectory
