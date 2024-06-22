@@ -18,6 +18,7 @@ import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.ReverseProxy
 import Network.HTTP.Simple qualified as HTTP
+import Network.HTTP.Types.Header (hReferer)
 import Network.HTTP.Types.Status (ok200, movedPermanently301, unauthorized401, serviceUnavailable503, badGateway502, statusCode)
 import Network.Wai
 import Network.Wai.Handler.Warp
@@ -182,23 +183,44 @@ proxyApp req respond = do
         ["switch"] -> liftIO $ checkApiKey apiKeyVar (switchInstance activeEnvVar respond) req respond
         "preview" : rest -> liftIO $ checkApiKey apiKeyVar (previewInactiveServer activeEnvVar manager rest) req respond
         _ -> do
-            activeEnv <- getActiveEnv
-            let proxyDest _ = return $ WPRProxyDest $ ProxyDest "127.0.0.1" (port activeEnv)
-                handleErrors e _ res = liftIO $ do
-                    putStrLn $ "Proxy error: " ++ show e
-                    res $ responseLBS badGateway502 
-                        [("Content-Type", "text/plain")] 
-                        "Unable to process your request at this time. Please try again later."
-            liftIO $ waiProxyTo proxyDest handleErrors manager req respond
+            case checkRefererForPreview req of
+                Just previewPath -> redirectToPreview previewPath req respond
+                Nothing -> do
+                    activeEnv <- getActiveEnv
+                    let proxyDest _ = return $ WPRProxyDest $ ProxyDest "127.0.0.1" (port activeEnv)
+                    liftIO $ waiProxyTo proxyDest handleErrors manager req respond
     where
-      healthOfEnv :: MVar Env -> Application
-      healthOfEnv activeEnvVar _ res = do
-          env <- readMVar activeEnvVar
-          backendHealthy <- checkBackendHealth env
-          if backendHealthy
-              then res $ responseLBS ok200 [("Content-Type", "text/plain")] "OK"
-              else res $ responseLBS serviceUnavailable503 [("Content-Type", "text/plain")] "Service Unavailable"
+        healthOfEnv :: MVar Env -> Application
+        healthOfEnv activeEnvVar _ res = do
+            env <- readMVar activeEnvVar
+            backendHealthy <- checkBackendHealth env
+            if backendHealthy
+                then res $ responseLBS ok200 [("Content-Type", "text/plain")] "OK"
+                else res $ responseLBS serviceUnavailable503 [("Content-Type", "text/plain")] "Service Unavailable"
 
+checkRefererForPreview :: Request -> Maybe BS.ByteString
+checkRefererForPreview req = do
+    referer <- lookup hReferer (requestHeaders req)
+    if "/preview/" `BS.isInfixOf` referer || "/preview" `BS.isSuffixOf` referer
+        then Just "/preview"
+        else Nothing
+
+redirectToPreview :: BS.ByteString -> Request -> (Response -> IO ResponseReceived) -> ReaderT AppConfig IO ResponseReceived
+redirectToPreview previewPrefix req respond = do
+    let path = rawPathInfo req
+        newLocation = previewPrefix <> path
+    liftIO $ respond $ responseLBS movedPermanently301 
+        [ ("Location", newLocation)
+        , ("Content-Type", "text/plain")
+        ] 
+        "Redirecting to preview version"
+
+handleErrors :: SomeException -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
+handleErrors e _ res = liftIO $ do
+    putStrLn $ "Proxy error: " ++ show e
+    res $ responseLBS badGateway502 
+        [("Content-Type", "text/plain")] 
+        "Unable to process your request at this time. Please try again later."
 
 previewInactiveServer :: MVar Env -> Manager -> [Text] -> Application
 previewInactiveServer activeEnvVar manager pathSegments req respond = do
@@ -210,7 +232,7 @@ previewInactiveServer activeEnvVar manager pathSegments req respond = do
                         , requestHeaderHost = Just "localhost"
                         }
       let proxyDest _ = return $ WPRProxyDest $ ProxyDest "127.0.0.1" inactivePort
-      waiProxyTo proxyDest defaultOnExc manager proxyReq respond
+      waiProxyTo proxyDest handleErrors manager proxyReq respond
 
 getActiveAndRespond :: MVar Env -> (Response -> IO ResponseReceived) -> Application
 getActiveAndRespond activeEnvVar respond _ _ = do
