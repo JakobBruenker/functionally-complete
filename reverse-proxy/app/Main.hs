@@ -29,9 +29,9 @@ import Network.Wai
 import Network.Wai.Handler.Warp
 import Network.Wai.Handler.WarpTLS (runTLS, tlsSettingsChain, TLSSettings)
 import Options.Applicative hiding (action)
-import System.Directory (createDirectoryIfMissing, getHomeDirectory)
+import System.Directory (createDirectoryIfMissing, getHomeDirectory, canonicalizePath)
 import System.Environment (getEnv, getProgName)
-import System.FilePath ((</>))
+import System.FilePath ((</>), equalFilePath)
 import System.FSNotify
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -141,33 +141,34 @@ runProxy :: AppConfig -> FilePath -> Int -> Int -> IO ()
 runProxy appConfig configDir httpPort httpsPort = do
     certPath <- getEnv "SSL_CERT_PATH"
     keyPath <- getEnv "SSL_KEY_PATH"
-    putStrLn $ "Starting HTTP redirect server on port " ++ show httpPort
-    putStrLn $ "Starting HTTPS reverse proxy on port " ++ show httpsPort
-    
+    putStrLn $ "Watching config files in " ++ configDir
     void $ forkIO $ watchConfigFiles configDir appConfig
+
+    putStrLn $ "Starting HTTP redirect server on port " ++ show httpPort
     void $ forkIO $ run httpPort redirectApp
     
     app <- runReaderT reverseProxyApp appConfig
+    putStrLn $ "Starting HTTPS reverse proxy on port " ++ show httpsPort
     runTLS (tlsSettings certPath keyPath) (setPort httpsPort defaultSettings) app
 
 watchConfigFiles :: FilePath -> AppConfig -> IO ()
 watchConfigFiles configDir AppConfig{..} = withManager $ \mgr -> do
-    let apiKeyFile = configDir </> "api_key"
-        active = configDir </> "active_port"
-        inactive = configDir </> "inactive_port"
-
+    canonicalConfigDir <- canonicalizePath configDir
+    let apiKeyFile = canonicalConfigDir </> "api_key"
+        active = canonicalConfigDir </> "active_port"
+        inactive = canonicalConfigDir </> "inactive_port"
     void $ watchDir mgr configDir (const True) $ \event -> do
-        let path = eventPath event
-        if | path == apiKeyFile -> do
+        path <- canonicalizePath (eventPath event)
+        putStrLn path
+        if | equalFilePath path apiKeyFile -> do
                newApiKey <- readApiKey apiKeyFile
                void $ swapMVar apiKeyVar newApiKey
                putStrLn "API key updated"
-           | path == active || path == inactive -> do
+           | equalFilePath path active || equalFilePath path inactive -> do
                newPorts <- readPortsFiles Ports{..}
                void $ swapMVar portsVar newPorts
-               putStrLn "Ports updated"
+               putStrLn $ "Ports updated: " ++ show newPorts.active ++ " (active), " ++ show newPorts.inactive ++ " (inactive)"
            | otherwise -> return ()
-
     forever $ threadDelay 1000000
 
 checkApiKey :: MVar BS.ByteString -> Middleware
