@@ -1,38 +1,41 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE BlockArguments #-}
+{-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE NoFieldSelectors #-}
+{-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Main (main) where
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar
 import Control.Exception (catch, SomeException, try)
-import Control.Monad (when, void, forever)
+import Control.Monad (void, forever, when)
 import Control.Monad.Reader (ReaderT, runReaderT, ask, liftIO)
+import Control.Monad.Identity
 import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy.Char8 qualified as LBS
 import Data.Char (isSpace)
 import Data.List (isPrefixOf)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isNothing)
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.ReverseProxy
 import Network.HTTP.Simple qualified as HTTP
 import Network.HTTP.Types.Header (hReferer)
-import Network.HTTP.Types.Status (ok200, movedPermanently301, unauthorized401, serviceUnavailable503, badGateway502, statusCode)
+import Network.HTTP.Types.Status (ok200, movedPermanently301, unauthorized401, serviceUnavailable503, badGateway502, temporaryRedirect307, statusCode)
 import Network.Wai
 import Network.Wai.Handler.Warp
 import Network.Wai.Handler.WarpTLS (runTLS, tlsSettingsChain, TLSSettings)
-import Options.Applicative
+import Options.Applicative hiding (action)
 import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import System.Environment (getEnv, getProgName)
-import System.FilePath ((</>), takeDirectory)
+import System.FilePath ((</>))
 import System.FSNotify
 import Data.Text (Text)
 import Data.Text qualified as T
 
--- TODO instead of blue/green, have MVar (activePort, inactivePort) and two files activePort/inactivePort
--- -> probably default files with 8080 and 8081 should be created if they don't exist
 -- TODO I'm not sure App Application makes sense, that's double IO. Seems like it might have stale MVar values then?
 
 data Opts = Opts
@@ -43,11 +46,24 @@ data Opts = Opts
 
 data AppConfig = AppConfig
   { apiKeyVar :: MVar BS.ByteString
-  , activeEnvVar :: MVar Env
+  , portsVar :: MVar Ports
   , manager :: Manager
   }
 
 type App = ReaderT AppConfig IO
+
+type family HKD f a where
+  HKD Identity  a = a
+  HKD (Const b) a = b
+  HKD f         a = f a
+
+data Ports' f = Ports
+  { active   :: HKD f Int
+  , inactive :: HKD f Int
+  }
+
+type Ports = Ports' Identity
+type PortFiles = Ports' (Const FilePath)
 
 defaultHttpPort, defaultHttpsPort :: Int
 defaultHttpPort = 80
@@ -77,20 +93,6 @@ optsParser = Opts
      <> value defaultConfigDir
      <> help ("Configuration directory (default: " <> defaultConfigDir <> ")") )
 
-data Env = Blue | Green deriving (Eq, Read, Show)
-
-serializeEnv :: Env -> String
-serializeEnv = show
-
-parseEnv :: String -> Maybe Env
-parseEnv s = case reads s of
-  [(env, "")] -> Just env
-  _ -> Nothing
-
-port :: Env -> Int
-port Blue = 8080
-port Green = 8081
-
 main :: IO ()
 main = do
   progName <- getProgName
@@ -99,64 +101,73 @@ main = do
     <> progDesc "Run the reverse proxy for blue-green deployment"
     <> header progName )
   
-  configDir <- if "~" `isPrefixOf` configDir opts
-                then (</> drop 2 (configDir opts)) <$> getHomeDirectory
-                else return $ configDir opts
+  configDir <- if "~" `isPrefixOf` opts.configDir
+                then (</> drop 2 opts.configDir) <$> getHomeDirectory
+                else pure opts.configDir
   createDirectoryIfMissing True configDir
   
   let apiKeyFile = configDir </> "api_key"
-      activeEnvFile = configDir </> "active_env"
+      active = configDir </> "active_port"
+      inactive = configDir </> "inactive_port"
   
   apiKey <- readApiKey apiKeyFile
   apiKeyVar <- newMVar apiKey
   
-  activeEnv <- readEnvFile activeEnvFile
-  activeEnvVar <- newMVar activeEnv
+  activePorts <- readPortsFiles Ports{active, inactive}
+  portsVar <- newMVar activePorts
   
   manager <- newManager tlsManagerSettings
   
-  let appConfig = AppConfig {..}
+  let appConfig = AppConfig{..}
   
-  runProxy appConfig apiKeyFile activeEnvFile (httpPort opts) (httpsPort opts)
+  runProxy appConfig configDir opts.httpPort opts.httpsPort
 
 readApiKey :: FilePath -> IO BS.ByteString
 readApiKey file = BS.pack . takeWhile (not . isSpace) . dropWhile isSpace <$> readFile file
 
-readEnvFile :: FilePath -> IO Env
-readEnvFile file = do
-  content <- readFile file `catch` \(_ :: SomeException) -> return "Blue"
-  return $ fromMaybe Blue (parseEnv $ filter (not . isSpace) content)
+readPortsFiles :: PortFiles -> IO Ports
+readPortsFiles portFiles = do
+  active <- readPortFile portFiles.active 8080
+  inactive <- readPortFile portFiles.inactive 8081
+  pure Ports{..}
 
-runProxy :: AppConfig -> FilePath -> FilePath -> Int -> Int -> IO ()
-runProxy appConfig apiKeyFile activeEnvFile httpPort httpsPort = do
+readPortFile :: FilePath -> Int -> IO Int
+readPortFile file defaultPort = do
+  content <- (Just <$> readFile file) `catch` \(_ :: SomeException) -> pure Nothing
+  when (isNothing content) $ writeFile file (show defaultPort)
+  pure . read . filter (not . isSpace) $ fromMaybe (show defaultPort) content
+
+runProxy :: AppConfig -> FilePath -> Int -> Int -> IO ()
+runProxy appConfig configDir httpPort httpsPort = do
     certPath <- getEnv "SSL_CERT_PATH"
     keyPath <- getEnv "SSL_KEY_PATH"
     putStrLn $ "Starting HTTP redirect server on port " ++ show httpPort
     putStrLn $ "Starting HTTPS reverse proxy on port " ++ show httpsPort
     
-    void $ forkIO $ watchApiKeyFile (apiKeyVar appConfig) apiKeyFile
-    void $ forkIO $ watchActiveEnvFile (activeEnvVar appConfig) activeEnvFile
+    void $ forkIO $ watchConfigFiles configDir appConfig
     void $ forkIO $ run httpPort redirectApp
     
     app <- runReaderT reverseProxyApp appConfig
     runTLS (tlsSettings certPath keyPath) (setPort httpsPort defaultSettings) app
 
-watchApiKeyFile :: MVar BS.ByteString -> FilePath -> IO ()
-watchApiKeyFile apiKeyVar apiKeyFile = withManager $ \mgr -> do
-    void $ watchDir mgr (takeDirectory apiKeyFile) (const True) $ \event ->
-        when (eventPath event == apiKeyFile) $ do
-            newApiKey <- readApiKey apiKeyFile
-            void $ swapMVar apiKeyVar newApiKey
-            putStrLn "API key updated"
-    forever $ threadDelay 1000000
+watchConfigFiles :: FilePath -> AppConfig -> IO ()
+watchConfigFiles configDir AppConfig{..} = withManager $ \mgr -> do
+    let apiKeyFile = configDir </> "api_key"
+        active = configDir </> "active_port"
+        inactive = configDir </> "inactive_port"
 
-watchActiveEnvFile :: MVar Env -> FilePath -> IO ()
-watchActiveEnvFile activeEnvVar activeEnvFile = withManager $ \mgr -> do
-    void $ watchDir mgr (takeDirectory activeEnvFile) (const True) $ \event ->
-        when (eventPath event == activeEnvFile) $ do
-            newEnv <- readEnvFile activeEnvFile
-            void $ swapMVar activeEnvVar newEnv
-            putStrLn "Active environment updated"
+    void $ watchDir mgr configDir (const True) $ \event -> do
+        let path = eventPath event
+        if | path == apiKeyFile -> do
+               newApiKey <- readApiKey apiKeyFile
+               void $ swapMVar apiKeyVar newApiKey
+               putStrLn "API key updated"
+           | path == active || path == inactive -> do
+               newPorts <- readPortsFiles Ports{..}
+               void $ swapMVar portsVar newPorts
+               putStrLn "Ports updated"
+           | otherwise -> return ()
+
     forever $ threadDelay 1000000
 
 checkApiKey :: MVar BS.ByteString -> Middleware
@@ -175,28 +186,28 @@ reverseProxyApp = do
 
 proxyApp :: Request -> (Response -> IO ResponseReceived) -> App ResponseReceived
 proxyApp req respond = do
-    AppConfig{manager, activeEnvVar, apiKeyVar} <- ask
+    AppConfig{manager, portsVar, apiKeyVar} <- ask
     case pathInfo req of
-        ["health"] -> liftIO $ healthOfEnv activeEnvVar req respond
-        ["preview-health"] -> liftIO $ checkApiKey apiKeyVar (healthOfEnv activeEnvVar) req respond
-        ["active"] -> liftIO $ checkApiKey apiKeyVar (getActiveAndRespond activeEnvVar respond) req respond
-        ["switch"] -> liftIO $ checkApiKey apiKeyVar (switchInstance activeEnvVar respond) req respond
-        "preview" : rest -> liftIO $ checkApiKey apiKeyVar (previewInactiveServer activeEnvVar manager rest) req respond
+        ["health"] -> liftIO $ healthCheck portsVar req respond
+        ["preview-health"] -> liftIO $ checkApiKey apiKeyVar (healthCheck portsVar) req respond
+        ["active"] -> liftIO $ checkApiKey apiKeyVar (getActiveAndRespond portsVar respond) req respond
+        ["switch"] -> liftIO $ checkApiKey apiKeyVar (switchPorts portsVar respond) req respond
+        "preview" : rest -> liftIO $ checkApiKey apiKeyVar (previewInactiveServer portsVar manager rest) req respond
         _ -> do
             case checkRefererForPreview req of
                 Just previewPath -> redirectToPreview previewPath req respond
                 Nothing -> do
-                    activeEnv <- getActiveEnv
-                    let proxyDest _ = return $ WPRProxyDest $ ProxyDest "127.0.0.1" (port activeEnv)
+                    Ports{..} <- liftIO $ readMVar portsVar
+                    let proxyDest _ = return $ WPRProxyDest $ ProxyDest "127.0.0.1" active
                     liftIO $ waiProxyTo proxyDest handleErrors manager req respond
-    where
-        healthOfEnv :: MVar Env -> Application
-        healthOfEnv activeEnvVar _ res = do
-            env <- readMVar activeEnvVar
-            backendHealthy <- checkBackendHealth env
-            if backendHealthy
-                then res $ responseLBS ok200 [("Content-Type", "text/plain")] "OK"
-                else res $ responseLBS serviceUnavailable503 [("Content-Type", "text/plain")] "Service Unavailable"
+
+healthCheck :: MVar Ports -> Application
+healthCheck portsVar _ res = do
+    Ports{..} <- readMVar portsVar
+    backendHealthy <- checkBackendHealth active
+    if backendHealthy
+        then res $ responseLBS ok200 [("Content-Type", "text/plain")] "OK"
+        else res $ responseLBS serviceUnavailable503 [("Content-Type", "text/plain")] "Service Unavailable"
 
 checkRefererForPreview :: Request -> Maybe BS.ByteString
 checkRefererForPreview req = do
@@ -209,7 +220,7 @@ redirectToPreview :: BS.ByteString -> Request -> (Response -> IO ResponseReceive
 redirectToPreview previewPrefix req respond = do
     let path = rawPathInfo req
         newLocation = previewPrefix <> path
-    liftIO $ respond $ responseLBS movedPermanently301 
+    liftIO $ respond $ responseLBS temporaryRedirect307
         [ ("Location", newLocation)
         , ("Content-Type", "text/plain")
         ] 
@@ -222,31 +233,24 @@ handleErrors e _ res = liftIO $ do
         [("Content-Type", "text/plain")] 
         "Unable to process your request at this time. Please try again later."
 
-previewInactiveServer :: MVar Env -> Manager -> [Text] -> Application
-previewInactiveServer activeEnvVar manager pathSegments req respond = do
-      activeEnv <- liftIO $ readMVar activeEnvVar
-      let inactiveEnv = if activeEnv == Blue then Green else Blue
-          inactivePort = port inactiveEnv
-          newPath = BS.intercalate "/" $ map (BS.pack . T.unpack) pathSegments
+previewInactiveServer :: MVar Ports -> Manager -> [Text] -> Application
+previewInactiveServer portsVar manager pathSegments req respond = do
+      Ports{..} <- liftIO $ readMVar portsVar
+      let newPath = BS.intercalate "/" $ map (BS.pack . T.unpack) pathSegments
           proxyReq = req { rawPathInfo = newPath
-                        , requestHeaderHost = Just "localhost"
-                        }
-      let proxyDest _ = return $ WPRProxyDest $ ProxyDest "127.0.0.1" inactivePort
+                         , requestHeaderHost = Just "localhost"
+                         }
+      let proxyDest _ = return $ WPRProxyDest $ ProxyDest "127.0.0.1" inactive
       waiProxyTo proxyDest handleErrors manager proxyReq respond
 
-getActiveAndRespond :: MVar Env -> (Response -> IO ResponseReceived) -> Application
-getActiveAndRespond activeEnvVar respond _ _ = do
-    env <- readMVar activeEnvVar
-    respond $ responseLBS ok200 [("Content-Type", "text/plain")] (LBS.pack $ serializeEnv env)
+getActiveAndRespond :: MVar Ports -> (Response -> IO ResponseReceived) -> Application
+getActiveAndRespond portsVar respond _ _ = do
+    Ports{..} <- readMVar portsVar
+    respond $ responseLBS ok200 [("Content-Type", "text/plain")] (LBS.pack $ show active)
 
-getActiveEnv :: App Env
-getActiveEnv = do
-    AppConfig{..} <- ask
-    liftIO $ readMVar activeEnvVar
-
-checkBackendHealth :: Env -> IO Bool
-checkBackendHealth env = do
-    let request = HTTP.parseRequest_ $ "http://localhost:" ++ show (port env) ++ "/health"
+checkBackendHealth :: Int -> IO Bool
+checkBackendHealth port = do
+    let request = HTTP.parseRequest_ $ "http://localhost:" ++ show port ++ "/health"
     response <- liftIO $ try $ HTTP.httpLbs request
     pure case response of
         Left (_ :: HTTP.HttpException) -> False
@@ -260,9 +264,8 @@ redirectApp req respond = do
 tlsSettings :: FilePath -> FilePath -> TLSSettings
 tlsSettings cert key = tlsSettingsChain cert [cert] key
 
-switchInstance :: MVar Env -> (Response -> IO ResponseReceived) -> Application
-switchInstance activeEnvVar respond _ _ = do
-    currentEnv <- readMVar activeEnvVar
-    let newEnv = if currentEnv == Blue then Green else Blue
-    _ <- swapMVar activeEnvVar newEnv
-    respond $ responseLBS ok200 [] "Switched instance"
+switchPorts :: MVar Ports -> (Response -> IO ResponseReceived) -> Application
+switchPorts portsVar respond _ _ = do
+    Ports{..} <- readMVar portsVar
+    _ <- swapMVar portsVar Ports{active = inactive, inactive = active}
+    respond $ responseLBS ok200 [] "Switched ports"
