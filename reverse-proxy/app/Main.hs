@@ -10,15 +10,16 @@ module Main (main) where
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar
-import Control.Exception (catch, SomeException, try)
-import Control.Monad (void, forever, when)
+import Control.Exception (SomeException, try, handle)
+import Control.Monad (void, forever)
 import Control.Monad.Reader (ReaderT, runReaderT, ask, liftIO)
-import Control.Monad.Identity
 import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy.Char8 qualified as LBS
 import Data.Char (isSpace)
 import Data.List (isPrefixOf)
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Text (Text)
+import Data.Text qualified as T
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.ReverseProxy
@@ -28,92 +29,49 @@ import Network.HTTP.Types.Status (ok200, movedPermanently301, unauthorized401, s
 import Network.Wai
 import Network.Wai.Handler.Warp
 import Network.Wai.Handler.WarpTLS (runTLS, tlsSettingsChain, TLSSettings)
-import Options.Applicative hiding (action)
 import System.Directory (createDirectoryIfMissing, getHomeDirectory, canonicalizePath)
-import System.Environment (getEnv, getProgName)
+import System.Environment (getEnv)
 import System.FilePath ((</>), equalFilePath)
 import System.FSNotify
-import Data.Text (Text)
-import Data.Text qualified as T
+import System.IO.Error (isDoesNotExistError)
+
+import Options
 
 -- TODO I'm not sure App Application makes sense, that's double IO. Seems like it might have stale MVar values then?
-
-data Opts = Opts
-  { httpPort :: Int
-  , httpsPort :: Int
-  , configDir :: FilePath
-  }
 
 data AppConfig = AppConfig
   { apiKeyVar :: MVar BS.ByteString
   , portsVar :: MVar Ports
   , manager :: Manager
+  , configDir :: FilePath
   }
 
 type App = ReaderT AppConfig IO
 
-type family HKD f a where
-  HKD Identity  a = a
-  HKD (Const b) a = b
-  HKD f         a = f a
-
-data Ports' f = Ports
-  { active   :: HKD f Int
-  , inactive :: HKD f Int
+data Ports = Ports
+  { active   :: Int
+  , inactive :: Int
   }
 
-type Ports = Ports' Identity
-type PortFiles = Ports' (Const FilePath)
-
-defaultHttpPort, defaultHttpsPort :: Int
-defaultHttpPort = 80
-defaultHttpsPort = 443
-
-defaultConfigDir :: FilePath
-defaultConfigDir = "~/.config/functionally-complete"
-
-optsParser :: Parser Opts
-optsParser = Opts
-  <$> option auto
-      ( long "http-port"
-     <> short 'p'
-     <> metavar "HTTP_PORT"
-     <> value defaultHttpPort
-     <> help ("Port for HTTP server (default: " <> show defaultHttpPort <> ")") )
-  <*> option auto
-      ( long "https-port"
-     <> short 's'
-     <> metavar "HTTPS_PORT"
-     <> value defaultHttpsPort
-     <> help ("Port for HTTPS server (default: " <> show defaultHttpsPort <> ")") )
-  <*> strOption
-      ( long "config-dir"
-     <> short 'c'
-     <> metavar "CONFIG_DIR"
-     <> value defaultConfigDir
-     <> help ("Configuration directory (default: " <> defaultConfigDir <> ")") )
+apiKeyFileName, portsFileName :: FilePath
+apiKeyFileName = "api_key"
+portsFileName = "ports.conf"
 
 main :: IO ()
 main = do
-  progName <- getProgName
-  opts <- execParser $ info (optsParser <**> helper)
-    ( fullDesc
-    <> progDesc "Run the reverse proxy for blue-green deployment"
-    <> header progName )
-  
+  opts <- parseOpts
   configDir <- if "~" `isPrefixOf` opts.configDir
                 then (</> drop 2 opts.configDir) <$> getHomeDirectory
                 else pure opts.configDir
   createDirectoryIfMissing True configDir
   
-  let apiKeyFile = configDir </> "api_key"
-      active = configDir </> "active_port"
-      inactive = configDir </> "inactive_port"
+  let portsFile = configDir </> portsFileName
+  let apiKeyFile = configDir </> apiKeyFileName
   
   apiKey <- readApiKey apiKeyFile
   apiKeyVar <- newMVar apiKey
   
-  activePorts <- readPortsFiles Ports{active, inactive}
+  activePorts <- readPorts portsFile
   portsVar <- newMVar activePorts
   
   manager <- newManager tlsManagerSettings
@@ -123,51 +81,80 @@ main = do
   runProxy appConfig configDir opts.httpPort opts.httpsPort
 
 readApiKey :: FilePath -> IO BS.ByteString
-readApiKey file = BS.pack . takeWhile (not . isSpace) . dropWhile isSpace <$> readFile file
+readApiKey file = do
+  apiKey <- BS.pack . takeWhile (not . isSpace) . dropWhile isSpace <$> readFile file
+  if BS.null apiKey
+    then fail "API key file is empty"
+    else return apiKey
 
-readPortsFiles :: PortFiles -> IO Ports
-readPortsFiles portFiles = do
-  active <- readPortFile portFiles.active 8080
-  inactive <- readPortFile portFiles.inactive 8081
-  pure Ports{..}
+readPorts :: FilePath -> IO Ports
+readPorts file = do
+  result <- try $ readFile file
+  case result of
+    Left e ->
+      if isDoesNotExistError e
+        then writeDefaultPorts file
+        else fail $ "Error reading ports file: " ++ show e
+    Right content -> case parsePorts content of
+      Just ports -> return ports
+      Nothing -> fail "Invalid ports file format"
+  where
+    writeDefaultPorts f = do
+      let defaultPorts = Ports{active = 8080, inactive = 8081}
+      writeFile f $ portsToString defaultPorts
+      pure defaultPorts
 
-readPortFile :: FilePath -> Int -> IO Int
-readPortFile file defaultPort = do
-  content <- (Just <$> readFile file) `catch` \(_ :: SomeException) -> pure Nothing
-  when (isNothing content) $ writeFile file (show defaultPort)
-  pure . read . filter (not . isSpace) $ fromMaybe (show defaultPort) content
+parsePorts :: String -> Maybe Ports
+parsePorts content = do
+  let pairs = mapMaybe parseLine $ lines content
+  active <- lookup "active" pairs
+  inactive <- lookup "inactive" pairs
+  return $ Ports active inactive
+
+parseLine :: String -> Maybe (String, Int)
+parseLine line = case break (== ':') $ dropWhile (== ' ') line of
+  (key, ':':value) -> case reads $ dropWhile (== ' ') value of
+    [(intValue, "")] -> Just (key, intValue)
+    _ -> Nothing
+  _ -> Nothing
+
+portsToString :: Ports -> String
+portsToString Ports{..} = unlines
+  [ "active: " ++ show active
+  , "inactive: " ++ show inactive
+  ]
 
 runProxy :: AppConfig -> FilePath -> Int -> Int -> IO ()
-runProxy appConfig configDir httpPort httpsPort = do
-    certPath <- getEnv "SSL_CERT_PATH"
-    keyPath <- getEnv "SSL_KEY_PATH"
-    putStrLn $ "Watching config files in " ++ configDir
-    void $ forkIO $ watchConfigFiles configDir appConfig
+runProxy appConfig configDir httpPort httpsPort = flip runReaderT appConfig do
+    certPath <- liftIO $ getEnv "SSL_CERT_PATH"
+    keyPath <- liftIO $ getEnv "SSL_KEY_PATH"
+    liftIO . putStrLn $ "Watching config files in " ++ configDir
+    liftIO . void $ forkIO $ watchConfigFiles appConfig
 
-    putStrLn $ "Starting HTTP redirect server on port " ++ show httpPort
-    void $ forkIO $ run httpPort redirectApp
+    liftIO . putStrLn $ "Starting HTTP redirect server on port " ++ show httpPort
+    liftIO . void $ forkIO $ run httpPort redirectApp
     
-    app <- runReaderT reverseProxyApp appConfig
-    putStrLn $ "Starting HTTPS reverse proxy on port " ++ show httpsPort
-    runTLS (tlsSettings certPath keyPath) (setPort httpsPort defaultSettings) app
+    app <- reverseProxyApp
+    liftIO $ putStrLn $ "Starting HTTPS reverse proxy on port " ++ show httpsPort
+    liftIO $ runTLS (tlsSettings certPath keyPath) (setPort httpsPort defaultSettings) app
 
-watchConfigFiles :: FilePath -> AppConfig -> IO ()
-watchConfigFiles configDir AppConfig{..} = withManager $ \mgr -> do
+watchConfigFiles :: AppConfig -> IO ()
+watchConfigFiles AppConfig{..} = withManager $ \mgr -> do
     canonicalConfigDir <- canonicalizePath configDir
-    let apiKeyFile = canonicalConfigDir </> "api_key"
-        active = canonicalConfigDir </> "active_port"
-        inactive = canonicalConfigDir </> "inactive_port"
+    let apiKeyFile = canonicalConfigDir </> apiKeyFileName
+        portsFile = canonicalConfigDir </> portsFileName
     void $ watchDir mgr configDir (const True) $ \event -> do
         path <- canonicalizePath (eventPath event)
-        putStrLn path
-        if | equalFilePath path apiKeyFile -> do
-               newApiKey <- readApiKey apiKeyFile
-               void $ swapMVar apiKeyVar newApiKey
-               putStrLn "API key updated"
-           | equalFilePath path active || equalFilePath path inactive -> do
-               newPorts <- readPortsFiles Ports{..}
-               void $ swapMVar portsVar newPorts
-               putStrLn $ "Ports updated: " ++ show newPorts.active ++ " (active), " ++ show newPorts.inactive ++ " (inactive)"
+        if | equalFilePath path apiKeyFile -> handle
+               do \(e :: SomeException) -> putStrLn $ "Error updating API key: " ++ show e
+               do newApiKey <- readApiKey apiKeyFile
+                  void $ swapMVar apiKeyVar newApiKey
+                  putStrLn "API key updated"
+           | equalFilePath path portsFile -> handle
+               do \(e :: SomeException) -> putStrLn $ "Error updating ports: " ++ show e
+               do newPorts <- readPorts portsFile
+                  void $ swapMVar portsVar newPorts
+                  putStrLn $ "Ports updated: " <> show newPorts.active <> " (active), " <> show newPorts.inactive <> " (inactive)"
            | otherwise -> return ()
     forever $ threadDelay 1000000
 
@@ -183,16 +170,16 @@ checkApiKey apiKeyVar app req respond = do
 reverseProxyApp :: App Application
 reverseProxyApp = do
     appConfig <- ask
-    return $ \req respond -> runReaderT (proxyApp req respond) appConfig
+    pure \req respond -> runReaderT (proxyApp req respond) appConfig
 
 proxyApp :: Request -> (Response -> IO ResponseReceived) -> App ResponseReceived
 proxyApp req respond = do
-    AppConfig{manager, portsVar, apiKeyVar} <- ask
+    AppConfig{..} <- ask
     case pathInfo req of
         ["health"] -> liftIO $ healthCheck portsVar req respond
         ["preview-health"] -> liftIO $ checkApiKey apiKeyVar (healthCheck portsVar) req respond
         ["active"] -> liftIO $ checkApiKey apiKeyVar (getActiveAndRespond portsVar respond) req respond
-        ["switch"] -> liftIO $ checkApiKey apiKeyVar (switchPorts portsVar respond) req respond
+        ["switch"] -> liftIO $ checkApiKey apiKeyVar (switchPorts configDir portsVar respond) req respond
         "preview" : rest -> liftIO $ checkApiKey apiKeyVar (previewInactiveServer portsVar manager rest) req respond
         _ -> do
             case checkRefererForPreview req of
@@ -265,8 +252,11 @@ redirectApp req respond = do
 tlsSettings :: FilePath -> FilePath -> TLSSettings
 tlsSettings cert key = tlsSettingsChain cert [cert] key
 
-switchPorts :: MVar Ports -> (Response -> IO ResponseReceived) -> Application
-switchPorts portsVar respond _ _ = do
-    Ports{..} <- readMVar portsVar
-    _ <- swapMVar portsVar Ports{active = inactive, inactive = active}
-    respond $ responseLBS ok200 [] "Switched ports"
+-- TODO Why are we getting respond as a separate argument and then ignoring it the second time
+switchPorts :: FilePath -> MVar Ports -> (Response -> IO ResponseReceived) -> Application
+switchPorts configDir portsVar respond _ _ = do
+    let portsFile = configDir </> portsFileName
+    currentPorts <- readMVar portsVar
+    let newPorts = Ports { active = currentPorts.inactive, inactive = currentPorts.active }
+    writeFile portsFile $ portsToString newPorts
+    respond $ responseLBS ok200 [] "Port switch initiated"

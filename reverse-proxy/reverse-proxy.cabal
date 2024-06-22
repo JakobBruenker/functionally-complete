@@ -19,7 +19,7 @@ common warnings
 executable reverse-proxy
     import:           warnings
     main-is:          Main.hs
-    -- other-modules:
+    other-modules:    Options
     -- other-extensions:
     build-depends:    base ^>=4.20.0.0,
                       bytestring >= 0.12.1 && < 0.13,
