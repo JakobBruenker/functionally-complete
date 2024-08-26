@@ -40,8 +40,6 @@ import System.IO.Error (isDoesNotExistError)
 
 import Options
 
--- TODO I'm not sure App Application makes sense, that's double IO. Seems like it might have stale MVar values then?
-
 data AppConfig = AppConfig
   { apiKeyVar :: MVar BS.ByteString
   , portsVar :: MVar Ports
